@@ -32,18 +32,8 @@ You can set `rabbitmq.Debug = true` variable to view debug messages
 
 ## Examples
 
-### Close by developer
-
-> go run examples/close_by_developer/demo.go -url=amqp://user:password@host:port/
-
 ### Close with reconnect
 
 > go run examples/close_with_reconnect/demo.go -url=amqp://user:password@host:port/
 
 after start, drop connection through RabbitMQ management panel on connection tabs, or restart RabbitMQ server
-
-### Graceful Shutdown
-
-> go run examples/graceful_shutdown/demo.go -url=amqp://user:password@host:port/
-
-after start try to interrupt with (Ctrl or Cmd + C) app, see that all messages processed and only after that all connections closed

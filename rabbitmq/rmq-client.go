@@ -3,6 +3,9 @@ package rabbitmq
 import (
 	"encoding/json"
 	"fmt"
+	"log"
+	"sync"
+	"time"
 
 	"github.com/streadway/amqp"
 )
@@ -21,53 +24,65 @@ const (
 type ChannelOptions struct {
 	ConnectionString     string
 	QueueName            string
-	QueueTTL             *int  // Pointer to int, because it's optional
-	QueueDurable         *bool // Pointer to bool, to handle the optional case
-	QueueExchangeType    *QueueExchangeType
+	QueueTTL             int  // Pointer to int, because it's optional
+	QueueDurable         bool // Pointer to bool, to handle the optional case
+	QueueExchangeType    QueueExchangeType
 	QueueExchangeOptions amqp.Table
-	QueueExchange        *string
-	DeadQueue            *string
-	DeadExchange         *string
-	DeadQueueDurable     *bool
-	DeadQueueTTL         *int
+	QueueExchange        string
+	DeadQueue            string
+	DeadExchange         string
+	DeadQueueDurable     bool
+	DeadQueueTTL         int
 	Arguments            amqp.Table
-	QueueRoutingKey      *string
+	QueueRoutingKey      string
 }
 
 // RmqClient represents the RabbitMQ Client
 type RmqClient struct {
-	options *ChannelOptions
-	channel *Channel
-	conn    *Connection
+	Options *ChannelOptions
+	Channel *Channel
+	Conn    *Connection
 }
 
 // NewRmqClient creates a new instance of RmqClient
 func NewRmqClient(options *ChannelOptions) *RmqClient {
+	conn, err := Dial(options.ConnectionString)
+	if err != nil {
+		log.Fatalf("failed to connect to RabbitMQ: %v", err)
+	}
+
+	channel, err := conn.Channel()
+	if err != nil {
+		log.Fatalf("failed to open a channel: %v", err)
+	}
+
 	return &RmqClient{
-		options: options,
+		Options: options,
+		Channel: channel,
+		Conn:    conn,
 	}
 }
 
 // OpenChannel opens and configures a channel with the specified options
 func (client *RmqClient) OpenChannel(options *ChannelOptions) error {
-	conn, err := Dial(options.ConnectionString)
-	if err != nil {
-		return err
-	}
-	client.conn = conn
-
-	client.channel, err = client.conn.Channel()
-	if err != nil {
-		return err
+	if client.Conn.IsClosed() {
+		return fmt.Errorf("connection is closed")
 	}
 
-	if options.QueueExchange != nil {
+	if options.QueueName == "" {
+		return fmt.Errorf("queueName is required")
+	}
+
+	// create exchange if QueueExchange is defined
+	if options.QueueExchange != "" {
 		exchangeType := "direct" // default exchange type
-		if options.QueueExchangeType != nil {
-			exchangeType = string(*options.QueueExchangeType)
+		if options.QueueExchangeType != "" {
+			exchangeType = string(options.QueueExchangeType)
 		}
-		err = client.channel.ExchangeDeclare(
-			*options.QueueExchange,
+
+		// create exchange
+		err := client.Channel.ExchangeDeclare(
+			options.QueueExchange,
 			exchangeType,
 			true,
 			false,
@@ -81,8 +96,8 @@ func (client *RmqClient) OpenChannel(options *ChannelOptions) error {
 	}
 
 	queueOptions := amqp.Table{}
-	if options.QueueTTL != nil {
-		queueOptions["x-message-ttl"] = *options.QueueTTL
+	if options.QueueTTL != 0 {
+		queueOptions["x-message-ttl"] = options.QueueTTL
 	}
 	if options.Arguments != nil {
 		for key, value := range options.Arguments {
@@ -90,7 +105,8 @@ func (client *RmqClient) OpenChannel(options *ChannelOptions) error {
 		}
 	}
 
-	_, err = client.channel.QueueDeclare(
+	// create queue if QueueName is defined
+	_, err := client.Channel.QueueDeclare(
 		options.QueueName,
 		true,
 		false,
@@ -103,14 +119,29 @@ func (client *RmqClient) OpenChannel(options *ChannelOptions) error {
 		return err
 	}
 
-	if options.DeadExchange != nil && options.DeadQueue != nil {
+	// bind queue to exchange if QueueExchange is defined
+	if options.QueueExchange != "" && options.QueueRoutingKey != "" {
+		err = client.Channel.QueueBind(
+			options.QueueName,
+			"",
+			options.QueueExchange,
+			false,
+			nil,
+		)
+		if err != nil {
+			return err
+		}
+	}
+
+	// create dead letter queue if DeadQueue is defined and DeadExchange is defined
+	if options.DeadExchange != "" && options.DeadQueue != "" {
 		deadQueueOptions := amqp.Table{}
-		if options.DeadQueueTTL != nil {
-			deadQueueOptions["x-message-ttl"] = *options.DeadQueueTTL
+		if options.DeadQueueTTL != 0 {
+			deadQueueOptions["x-message-ttl"] = options.DeadQueueTTL
 		}
 
-		err = client.channel.ExchangeDeclare(
-			*options.DeadExchange,
+		err = client.Channel.ExchangeDeclare(
+			options.DeadExchange,
 			"fanout",
 			true,
 			false,
@@ -122,8 +153,8 @@ func (client *RmqClient) OpenChannel(options *ChannelOptions) error {
 			return err
 		}
 
-		_, err = client.channel.QueueDeclare(
-			*options.DeadQueue,
+		_, err = client.Channel.QueueDeclare(
+			options.DeadQueue,
 			true,
 			false,
 			false,
@@ -134,10 +165,10 @@ func (client *RmqClient) OpenChannel(options *ChannelOptions) error {
 			return err
 		}
 
-		err = client.channel.QueueBind(
-			*options.DeadQueue,
+		err = client.Channel.QueueBind(
+			options.DeadQueue,
 			"",
-			*options.DeadExchange,
+			options.DeadExchange,
 			false,
 			nil,
 		)
@@ -146,33 +177,57 @@ func (client *RmqClient) OpenChannel(options *ChannelOptions) error {
 		}
 	}
 
-	if options.QueueExchange != nil && options.QueueRoutingKey != nil {
-		err = client.channel.QueueBind(
-			options.QueueName,
-			*options.QueueRoutingKey,
-			*options.QueueExchange,
-			false,
-			nil,
-		)
-		if err != nil {
-			return err
-		}
-	}
-
-	client.channel.Qos(1, 0, false)
-
-	client.options = options
+	client.Channel.Qos(1, 0, false)
+	client.Options = options
 
 	return nil
 }
 
-// getMessage receives a single message from the specified queue, acknowledging it if found
-func (client *RmqClient) GetMessage() (*amqp.Delivery, error) {
-	if client.channel == nil {
+func (client *RmqClient) Consume() (<-chan amqp.Delivery, error) {
+	if client.Channel == nil {
 		return nil, fmt.Errorf("please open an RMQ channel first")
 	}
 
-	msg, ok, err := client.channel.Get(client.options.QueueName, false) // false means no auto-ack
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		client.waitForReconnect()
+		defer wg.Done()
+	}()
+	wg.Wait()
+
+	msgs, err := client.Channel.Consume(
+		client.Options.QueueName,
+		"",
+		false,
+		false,
+		false,
+		false,
+		nil,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	return msgs, nil
+
+}
+
+// getMessage receives a single message from the specified queue, acknowledging it if found
+func (client *RmqClient) GetMessage() (*amqp.Delivery, error) {
+	if client.Channel == nil {
+		return nil, fmt.Errorf("please open an RMQ channel first")
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		client.waitForReconnect()
+		defer wg.Done()
+	}()
+	wg.Wait()
+
+	msg, ok, err := client.Channel.Get(client.Options.QueueName, false) // false means no auto-ack
 	if err != nil {
 		return nil, err
 	}
@@ -181,7 +236,7 @@ func (client *RmqClient) GetMessage() (*amqp.Delivery, error) {
 	}
 
 	// Acknowledge the message
-	err = client.channel.Ack(msg.DeliveryTag, false)
+	err = client.Channel.Ack(msg.DeliveryTag, false)
 	if err != nil {
 		return nil, fmt.Errorf("failed to ack message: %v", err)
 	}
@@ -191,22 +246,33 @@ func (client *RmqClient) GetMessage() (*amqp.Delivery, error) {
 
 // sendMessage sends a message to the specified exchange
 func (client *RmqClient) SendMessage(msg interface{}, routingKey string, publishOptions amqp.Publishing) error {
-	if client.channel == nil || client.options.QueueExchange == nil {
+	if client.Channel == nil || client.Options.QueueExchange == "" {
 		return fmt.Errorf("please open an RMQ channel first and define queueExchange options")
 	}
 
-	messageBytes, err := json.Marshal(msg)
-	if err != nil {
-		return fmt.Errorf("error marshaling message: %v", err)
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		client.waitForReconnect()
+		defer wg.Done()
+	}()
+	wg.Wait()
+
+	if publishOptions.ContentType == "" {
+		publishOptions.ContentType = "text/plain"
 	}
 
-	publishOptions.Body = messageBytes
+	messageBody, err := json.Marshal(msg)
+	if err != nil {
+		return err
+	}
 
-	if err := client.channel.Publish(
-		*client.options.QueueExchange, // Exchange
-		routingKey,                    // Routing key
-		false,                         // Mandatory
-		false,                         // Immediate
+	publishOptions.Body = messageBody
+	if err := client.Channel.Publish(
+		"",         // Exchange
+		routingKey, // Routing key
+		false,      // Mandatory
+		false,      // Immediate
 		publishOptions,
 	); err != nil {
 		return fmt.Errorf("failed to publish message: %v", err)
@@ -217,18 +283,27 @@ func (client *RmqClient) SendMessage(msg interface{}, routingKey string, publish
 
 // close cleanly shuts down the channel and connection
 func (client *RmqClient) Close() error {
-	if client.channel != nil {
-		if err := client.channel.Close(); err != nil {
+	if client.Channel != nil {
+		if err := client.Channel.Close(); err != nil {
 			return fmt.Errorf("failed to close channel: %v", err)
 		}
 	}
-	if client.conn != nil {
-		if err := client.conn.Close(); err != nil {
+	if client.Conn != nil {
+		if err := client.Conn.Close(); err != nil {
 			return fmt.Errorf("failed to close connection: %v", err)
 		}
 	}
-	client.channel = nil
-	client.conn = nil
-	client.options = nil
+	client.Channel = nil
+	client.Conn = nil
+	client.Options = nil
 	return nil
+}
+
+func (client *RmqClient) waitForReconnect() {
+	if client.Conn.IsClosed() {
+		log.Println(" reconnecting...")
+
+		time.Sleep(3 * time.Second)
+
+	}
 }
