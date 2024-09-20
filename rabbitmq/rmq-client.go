@@ -84,7 +84,7 @@ func (client *RmqClient) OpenChannel(options *ChannelOptions) error {
 		err := client.Channel.ExchangeDeclare(
 			options.QueueExchange,
 			exchangeType,
-			true,
+			options.QueueDurable,
 			false,
 			false,
 			false,
@@ -108,7 +108,7 @@ func (client *RmqClient) OpenChannel(options *ChannelOptions) error {
 	// create queue if QueueName is defined
 	_, err := client.Channel.QueueDeclare(
 		options.QueueName,
-		true,
+		options.QueueDurable,
 		false,
 		false,
 		false,
@@ -143,7 +143,7 @@ func (client *RmqClient) OpenChannel(options *ChannelOptions) error {
 		err = client.Channel.ExchangeDeclare(
 			options.DeadExchange,
 			"fanout",
-			true,
+			options.QueueDurable,
 			false,
 			false,
 			false,
@@ -155,7 +155,7 @@ func (client *RmqClient) OpenChannel(options *ChannelOptions) error {
 
 		_, err = client.Channel.QueueDeclare(
 			options.DeadQueue,
-			true,
+			options.QueueDurable,
 			false,
 			false,
 			false,
