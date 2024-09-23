@@ -157,7 +157,7 @@ func (client *RmqClient) OpenChannel(options *ChannelOptions) error {
 
 		_, err = client.Channel.QueueDeclare(
 			options.DeadQueue,
-			options.QueueDurable,
+			options.DeadQueueDurable,
 			false,
 			false,
 			false,
