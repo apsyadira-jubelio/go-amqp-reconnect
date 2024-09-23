@@ -32,6 +32,7 @@ type ChannelOptions struct {
 	DeadQueue            string
 	DeadExchange         string
 	DeadQueueDurable     bool
+	DeadExchangeDurable  bool // Exchange durable
 	DeadQueueTTL         int
 	Arguments            amqp.Table
 	QueueRoutingKey      string
@@ -84,7 +85,7 @@ func (client *RmqClient) OpenChannel(options *ChannelOptions) error {
 		err := client.Channel.ExchangeDeclare(
 			options.QueueExchange,
 			exchangeType,
-			options.QueueDurable,
+			options.DeadExchangeDurable,
 			false,
 			false,
 			false,
@@ -143,7 +144,7 @@ func (client *RmqClient) OpenChannel(options *ChannelOptions) error {
 		err = client.Channel.ExchangeDeclare(
 			options.DeadExchange,
 			"fanout",
-			options.QueueDurable,
+			options.DeadExchangeDurable,
 			false,
 			false,
 			false,

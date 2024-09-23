@@ -1,10 +1,11 @@
 package rabbitmq
 
 import (
-	"github.com/streadway/amqp"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/streadway/amqp"
 )
 
 type Channel struct {
