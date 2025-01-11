@@ -149,7 +149,7 @@ func (client *RmqClient) OpenChannel(options *ChannelOptions) error {
 			false,
 			false,
 			false,
-			nil,
+			options.QueueExchangeOptions,
 		)
 		if err != nil {
 			return err
